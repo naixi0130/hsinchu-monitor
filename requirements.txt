@@ -5,3 +5,4 @@ requests
 lxml
 pandas
 apify-client
+python-docx
