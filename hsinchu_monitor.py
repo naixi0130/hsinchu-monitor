@@ -110,24 +110,35 @@ def fetch_fb_posts():
         return []
     try:
         client = ApifyClient(st.secrets["APIFY_API_TOKEN"])
-        run_input = {"query": "新竹縣", "maxResults": 20}
-        run = client.actor("apify/facebook-posts-scraper").call(run_input=run_input)  # 使用官方較穩定的 Posts Scraper
+        
+        # 使用較穩定的 Actor，並提供 startUrls（必要欄位）
+        run_input = {
+            "startUrls": [
+                {"url": "https://www.facebook.com/search/posts/?q=%E6%96%B0%E7%AB%B9%E7%B8%A3"},  # 關鍵字搜尋
+                {"url": "https://www.facebook.com/groups/newtaipei"} ,   # 可自行替換成新竹相關社團
+            ],
+            "maxPosts": 15,
+            "onlyPosts": True
+        }
+        
+        run = client.actor("apify/facebook-posts-scraper").call(run_input=run_input)
         dataset = client.dataset(run["defaultDatasetId"]).iterate_items()
+        
         posts = []
-        for item in list(dataset)[:15]:
-            text = item.get("text") or item.get("message") or item.get("caption", "")[:300]
-            title = text[:80] or "Facebook 貼文"
-            if text.strip():
+        for item in list(dataset)[:12]:
+            text = item.get("text") or item.get("message") or item.get("caption", "")
+            if text and len(text.strip()) > 10:   # 過濾空內容
+                title = text[:80].replace("\n", " ")
                 posts.append({
                     "title": title,
-                    "summary": text,
+                    "summary": text[:350],
                     "time": now.strftime("%Y-%m-%d %H:%M"),
                     "platform": "Facebook",
                     "url": item.get("url") or item.get("postUrl") or "#"
                 })
         return posts
     except Exception as e:
-        st.warning(f"Facebook 抓取失敗: {str(e)[:100]}")
+        st.warning(f"Facebook 抓取失敗: {str(e)[:150]}")
         return []
 
 def fetch_ig_hashtag():
