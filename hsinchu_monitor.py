@@ -6,7 +6,7 @@
     <title>新竹縣社群監測器 - 完整版 (Streamlit)</title>
 </head>
 <body>
-    <h1 style="text-align:center; color:#15803d;">✅ 完整版已準備好！</h1>
+    <h1 style="text-align:center; color:#15803d;">完整版已準備好！</h1>
     <p style="text-align:center; font-size:1.1rem;">
         以下是<strong>真正的 Python + Streamlit 版本</strong>，可以在你電腦上跑一個完整的互動式網站。<br>
         一鍵抓取過去24小時「新竹縣」相關討論（Google News + PTT），自動分類、產生標題、大綱、時間、平台、網址。
