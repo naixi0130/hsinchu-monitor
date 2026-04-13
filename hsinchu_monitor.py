@@ -10,14 +10,14 @@ from io import BytesIO
 
 st.set_page_config(page_title="新竹縣社群監測器", page_icon="🏠", layout="wide")
 st.title("🏠 新竹縣社群監測器")
-st.caption("嚴格過去24小時討論 • Google News + PTT + Dcard + Facebook + Instagram")
+st.caption("嚴格過去24小時 • 已優化 FB 社團 + IG 關鍵字過濾")
 
 st.markdown("---")
 
 # ==================== 關鍵字分類 ====================
-politics_keywords = ["選舉", "議員", "縣長", "立委", "政黨", "藍營", "綠營", "民進黨", "國民黨", "民眾黨", "柯文哲", "侯友宜", "鄭朝方", "林智堅"]
-issues_keywords = ["竹北", "科學園區", "交通", "捷運", "高鐵", "房價", "開發", "環境", "空汙", "醫療", "教育"]
-disaster_keywords = ["地震", "颱風", "淹水", "豪雨", "火災", "爆炸", "車禍", "意外", "天災", "災情", "傷亡"]
+politics_keywords = ["選舉", "議員", "縣長", "立委", "政黨", "藍營", "綠營", "民進黨", "國民黨", "民眾黨", "柯文哲", "侯友宜", "鄭朝方", "林智堅", "議會", "質詢"]
+issues_keywords = ["竹北", "科學園區", "交通", "捷運", "高鐵", "房價", "開發", "環境", "空汙", "醫療", "教育", "建設", "停車", "道路"]
+disaster_keywords = ["地震", "颱風", "淹水", "豪雨", "火災", "爆炸", "車禍", "意外", "天災", "災情", "傷亡", "淹大水", "救援"]
 
 def classify_post(title, summary):
     text = (title + " " + summary).lower()
@@ -31,7 +31,7 @@ def classify_post(title, summary):
 now = datetime.now()
 cutoff = now - timedelta(hours=24)
 
-# ==================== 抓取函式（全部放在這裡） ====================
+# ==================== 抓取函式 ====================
 def fetch_google_news():
     url = "https://news.google.com/rss/search?q=%E6%96%B0%E7%AB%B9%E7%B8%A3&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     feed = feedparser.parse(url)
@@ -96,6 +96,7 @@ def fetch_dcard():
     except:
         return []
 
+# ==================== Facebook - 只抓推薦社團 ====================
 def fetch_fb_posts():
     if "APIFY_API_TOKEN" not in st.secrets:
         return []
@@ -103,19 +104,23 @@ def fetch_fb_posts():
         client = ApifyClient(st.secrets["APIFY_API_TOKEN"])
         run_input = {
             "startUrls": [
-                {"url": "https://www.facebook.com/search/posts/?q=新竹縣"},
-                {"url": "https://www.facebook.com/search/posts/?q=竹北"}
+                {"url": "https://www.facebook.com/groups/965991216800536/"},   # 新竹縣人新竹縣事
+                {"url": "https://www.facebook.com/groups/1924816131138636/"},  # 我是竹北人
+                {"url": "https://www.facebook.com/groups/195118655867167/"},   # 竹北生活大小事
+                {"url": "https://www.facebook.com/groups/181766803868709/"},   # 新竹大小事。二社
+                {"url": "https://www.facebook.com/groups/201184623938653/"},   # 竹北大小事
             ],
-            "maxPosts": 15
+            "maxPosts": 25,
+            "onlyPosts": True
         }
         run = client.actor("apify/facebook-posts-scraper").call(run_input=run_input)
         dataset = client.dataset(run["defaultDatasetId"]).iterate_items()
         posts = []
-        for item in list(dataset)[:10]:
+        for item in list(dataset)[:15]:
             text = item.get("text") or item.get("message") or ""
             if len(text.strip()) > 30:
                 posts.append({
-                    "title": text[:80].replace("\n", " "),
+                    "title": text[:85].replace("\n", " "),
                     "summary": text[:400],
                     "time": now.strftime("%Y-%m-%d %H:%M"),
                     "platform": "Facebook",
@@ -123,27 +128,30 @@ def fetch_fb_posts():
                 })
         return posts
     except Exception as e:
-        st.warning(f"Facebook 抓取失敗: {str(e)[:120]}")
+        st.warning(f"Facebook 抓取失敗: {str(e)[:150]}")
         return []
 
+# ==================== Instagram - 加強關鍵字過濾 ====================
 def fetch_ig_hashtag():
     if "APIFY_API_TOKEN" not in st.secrets:
         return []
     try:
         client = ApifyClient(st.secrets["APIFY_API_TOKEN"])
-        run_input = {"hashtags": ["新竹縣", "竹北"], "resultsLimit": 10}
+        run_input = {"hashtags": ["新竹縣", "竹北"], "resultsLimit": 20}
         run = client.actor("apify/instagram-hashtag-scraper").call(run_input=run_input)
         dataset = client.dataset(run["defaultDatasetId"]).iterate_items()
         posts = []
-        for item in list(dataset)[:8]:
-            caption = item.get("caption", "") or "Instagram 貼文"
-            posts.append({
-                "title": caption[:80],
-                "summary": caption[:300],
-                "time": now.strftime("%Y-%m-%d %H:%M"),
-                "platform": "Instagram",
-                "url": item.get("url") or "#"
-            })
+        filter_keywords = politics_keywords + issues_keywords + disaster_keywords
+        for item in list(dataset)[:12]:
+            caption = item.get("caption", "") or ""
+            if any(kw in caption for kw in filter_keywords):   # 加強過濾，只保留相關貼文
+                posts.append({
+                    "title": caption[:80],
+                    "summary": caption[:350],
+                    "time": now.strftime("%Y-%m-%d %H:%M"),
+                    "platform": "Instagram",
+                    "url": item.get("url") or "#"
+                })
         return posts
     except Exception as e:
         st.warning(f"Instagram 抓取失敗: {str(e)[:100]}")
@@ -170,7 +178,7 @@ def generate_word(all_posts, categories):
 
 # ==================== 主程式 ====================
 if st.button("🔥 一鍵抓取過去24小時討論", type="primary", use_container_width=True):
-    with st.spinner("抓取中...（Facebook 與 Instagram 可能較慢）"):
+    with st.spinner("抓取中... FB 社團 + IG 已加強過濾（可能需 30-60 秒）"):
         news = fetch_google_news()
         ptt = fetch_ptt()
         dcard = fetch_dcard()
@@ -184,7 +192,7 @@ if st.button("🔥 一鍵抓取過去24小時討論", type="primary", use_contai
             cat_key, _ = classify_post(post["title"], post.get("summary", ""))
             categories[cat_key].append(post)
         
-        st.success(f"✅ 抓取完成！共 {len(all_posts)} 則（Facebook {len(fb)} 則）")
+        st.success(f"✅ 抓取完成！共 {len(all_posts)} 則（Facebook {len(fb)} 則，Instagram {len(ig)} 則）")
         
         col1, col2, col3 = st.columns(3)
         for col, name, key in zip([col1, col2, col3], 
@@ -211,7 +219,7 @@ if st.button("🔥 一鍵抓取過去24小時討論", type="primary", use_contai
             )
 
 else:
-    st.info("👆 點擊上方按鈕開始抓取\n\n※ Facebook 目前抓取量有限，若想改善請提供新竹縣相關 FB 社團名稱")
+    st.info("👆 點擊上方按鈕開始抓取\n\n※ FB 已鎖定特定社團，IG 已加強政治/議題/災情過濾，無關內容會大幅減少")
 
 st.markdown("---")
-st.caption("已修正函式定義順序 • Word 匯出功能正常")
+st.caption("FB 已加入推薦社團 • IG 已加強關鍵字過濾 • 若還是抓到無關內容，請告訴我，我再繼續調整")
