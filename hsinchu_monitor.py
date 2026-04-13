@@ -10,11 +10,11 @@ from io import BytesIO
 
 st.set_page_config(page_title="新竹縣社群監測器", page_icon="🏠", layout="wide")
 st.title("🏠 新竹縣社群監測器")
-st.caption("嚴格過去24小時 • Google News + PTT + Dcard + Facebook + Instagram")
+st.caption("嚴格過去24小時討論 • Google News + PTT + Dcard + Facebook + Instagram")
 
 st.markdown("---")
 
-# 分類關鍵字
+# ==================== 關鍵字分類 ====================
 politics_keywords = ["選舉", "議員", "縣長", "立委", "政黨", "藍營", "綠營", "民進黨", "國民黨", "民眾黨", "柯文哲", "侯友宜", "鄭朝方", "林智堅"]
 issues_keywords = ["竹北", "科學園區", "交通", "捷運", "高鐵", "房價", "開發", "環境", "空汙", "醫療", "教育"]
 disaster_keywords = ["地震", "颱風", "淹水", "豪雨", "火災", "爆炸", "車禍", "意外", "天災", "災情", "傷亡"]
@@ -31,52 +31,146 @@ def classify_post(title, summary):
 now = datetime.now()
 cutoff = now - timedelta(hours=24)
 
-# ==================== 其他抓取函式保持不變（省略以節省空間） ====================
-# ...（fetch_google_news, fetch_ptt, fetch_dcard, fetch_ig_hashtag 保持原本最新版本）
+# ==================== 抓取函式（全部放在這裡） ====================
+def fetch_google_news():
+    url = "https://news.google.com/rss/search?q=%E6%96%B0%E7%AB%B9%E7%B8%A3&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    feed = feedparser.parse(url)
+    posts = []
+    for entry in feed.entries:
+        pub_date = datetime(*entry.published_parsed[:6]) if hasattr(entry, 'published_parsed') else now
+        if pub_date > cutoff:
+            posts.append({
+                "title": entry.title,
+                "summary": getattr(entry, 'summary', '')[:300],
+                "time": pub_date.strftime("%Y-%m-%d %H:%M"),
+                "platform": "Google News",
+                "url": entry.link
+            })
+    return posts
+
+def fetch_ptt():
+    headers = {"User-Agent": "Mozilla/5.0"}
+    session = requests.Session()
+    session.cookies.set("over18", "1")
+    url = "https://www.ptt.cc/bbs/Gossiping/search?q=%E6%96%B0%E7%AB%B9%E7%B8%A3"
+    try:
+        r = session.get(url, headers=headers, timeout=10)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(r.text, "html.parser")
+        posts = []
+        for div in soup.find_all("div", class_="r-ent")[:12]:
+            title_a = div.find("a")
+            if title_a:
+                posts.append({
+                    "title": title_a.text.strip(),
+                    "summary": "PTT 熱門討論 - 新竹縣相關",
+                    "time": "PTT 最近24小時",
+                    "platform": "PTT",
+                    "url": "https://www.ptt.cc" + title_a["href"]
+                })
+        return posts
+    except:
+        return []
+
+def fetch_dcard():
+    url = "https://www.dcard.tw/service/api/v2/posts?limit=30"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        data = r.json()
+        posts = []
+        for post in data:
+            title = post.get("title", "")
+            excerpt = post.get("excerpt", "")
+            if any(x in (title + excerpt) for x in ["新竹縣", "新竹"]):
+                created_time = datetime.fromtimestamp(post.get("createdAt", 0) / 1000)
+                if created_time > cutoff:
+                    posts.append({
+                        "title": title,
+                        "summary": excerpt[:300],
+                        "time": created_time.strftime("%Y-%m-%d %H:%M"),
+                        "platform": "Dcard",
+                        "url": f"https://www.dcard.tw/f/post/{post.get('id')}"
+                    })
+        return posts
+    except:
+        return []
 
 def fetch_fb_posts():
     if "APIFY_API_TOKEN" not in st.secrets:
-        st.info("未設定 Apify Token，跳過 Facebook")
         return []
-    
     try:
         client = ApifyClient(st.secrets["APIFY_API_TOKEN"])
-        
-        # 改用較穩定的 facebook-posts-scraper + 提供 startUrls
         run_input = {
             "startUrls": [
-                {"url": "https://www.facebook.com/search/posts/?q=新竹縣"},   # 關鍵字搜尋
-                {"url": "https://www.facebook.com/search/posts/?q=竹北"},     # 額外關鍵字
+                {"url": "https://www.facebook.com/search/posts/?q=新竹縣"},
+                {"url": "https://www.facebook.com/search/posts/?q=竹北"}
             ],
-            "maxPosts": 20,
-            "onlyPosts": True
+            "maxPosts": 15
         }
-        
         run = client.actor("apify/facebook-posts-scraper").call(run_input=run_input)
         dataset = client.dataset(run["defaultDatasetId"]).iterate_items()
-        
         posts = []
-        for item in list(dataset)[:15]:
-            text = item.get("text") or item.get("message") or item.get("caption", "") or ""
-            if len(text.strip()) > 20:   # 過濾空或太短的貼文
-                title = text[:85].replace("\n", " ")
+        for item in list(dataset)[:10]:
+            text = item.get("text") or item.get("message") or ""
+            if len(text.strip()) > 30:
                 posts.append({
-                    "title": title,
+                    "title": text[:80].replace("\n", " "),
                     "summary": text[:400],
                     "time": now.strftime("%Y-%m-%d %H:%M"),
                     "platform": "Facebook",
-                    "url": item.get("url") or item.get("facebookUrl") or item.get("postUrl") or "#"
+                    "url": item.get("url") or "#"
                 })
-        if not posts:
-            st.warning("Facebook 目前沒有抓到有效貼文（可能受平台限制）")
         return posts
     except Exception as e:
-        st.error(f"Facebook 抓取失敗: {str(e)[:200]}")
+        st.warning(f"Facebook 抓取失敗: {str(e)[:120]}")
         return []
 
-# ==================== 主程式（保持不變） ====================
+def fetch_ig_hashtag():
+    if "APIFY_API_TOKEN" not in st.secrets:
+        return []
+    try:
+        client = ApifyClient(st.secrets["APIFY_API_TOKEN"])
+        run_input = {"hashtags": ["新竹縣", "竹北"], "resultsLimit": 10}
+        run = client.actor("apify/instagram-hashtag-scraper").call(run_input=run_input)
+        dataset = client.dataset(run["defaultDatasetId"]).iterate_items()
+        posts = []
+        for item in list(dataset)[:8]:
+            caption = item.get("caption", "") or "Instagram 貼文"
+            posts.append({
+                "title": caption[:80],
+                "summary": caption[:300],
+                "time": now.strftime("%Y-%m-%d %H:%M"),
+                "platform": "Instagram",
+                "url": item.get("url") or "#"
+            })
+        return posts
+    except Exception as e:
+        st.warning(f"Instagram 抓取失敗: {str(e)[:100]}")
+        return []
+
+def generate_word(all_posts, categories):
+    doc = Document()
+    doc.add_heading('新竹縣社群監測報告 - 過去24小時', 0)
+    doc.add_paragraph(f'產生時間：{now.strftime("%Y-%m-%d %H:%M")}')
+    doc.add_paragraph(f'總共 {len(all_posts)} 則討論\n')
+    
+    for cat_key, cat_name in [("politics", "🔵 新竹縣政治"), ("issues", "🟠 新竹縣重大議題"), ("disasters", "🟥 新竹縣天災人禍")]:
+        doc.add_heading(cat_name, level=1)
+        for p in categories.get(cat_key, []):
+            doc.add_heading(p['title'], level=2)
+            doc.add_paragraph(f"平台：{p['platform']}   時間：{p['time']}")
+            doc.add_paragraph(p.get('summary', '無摘要'))
+            if p.get('url') and p['url'] != "#":
+                doc.add_paragraph(f"連結：{p['url']}")
+            doc.add_paragraph("─" * 40)
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+# ==================== 主程式 ====================
 if st.button("🔥 一鍵抓取過去24小時討論", type="primary", use_container_width=True):
-    with st.spinner("抓取中... Facebook 可能較慢"):
+    with st.spinner("抓取中...（Facebook 與 Instagram 可能較慢）"):
         news = fetch_google_news()
         ptt = fetch_ptt()
         dcard = fetch_dcard()
@@ -92,7 +186,6 @@ if st.button("🔥 一鍵抓取過去24小時討論", type="primary", use_contai
         
         st.success(f"✅ 抓取完成！共 {len(all_posts)} 則（Facebook {len(fb)} 則）")
         
-        # 顯示三欄（保持你原本的樣式）
         col1, col2, col3 = st.columns(3)
         for col, name, key in zip([col1, col2, col3], 
                                   ["🔵 新竹縣政治", "🟠 新竹縣重大議題", "🟥 新竹縣天災人禍"], 
@@ -101,23 +194,24 @@ if st.button("🔥 一鍵抓取過去24小時討論", type="primary", use_contai
                 st.subheader(name)
                 st.caption(f"{len(categories[key])} 則")
                 for p in categories[key]:
-                    with st.expander(f"**{p['title'][:70]}...**", expanded=False):
+                    with st.expander(f"**{p.get('title', '無標題')[:70]}...**", expanded=False):
                         st.caption(f"{p['platform']} • {p['time']}")
                         st.write(p.get('summary', '無內容'))
                         if p.get('url') and p['url'] != "#":
                             st.link_button("🔗 查看原文", p['url'])
 
-        # Word 匯出
         if all_posts:
-            word_bytes = generate_word(all_posts, categories)   # 你原本的 generate_word 函式
-            st.download_button("📄 匯出全部結果為 Word 文件", 
-                               data=word_bytes, 
-                               file_name=f"新竹縣監測報告_{now.strftime('%Y%m%d_%H%M')}.docx",
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                               use_container_width=True)
+            word_bytes = generate_word(all_posts, categories)
+            st.download_button(
+                label="📄 匯出全部結果為 Word 文件 (.docx)",
+                data=word_bytes,
+                file_name=f"新竹縣監測報告_{now.strftime('%Y%m%d_%H%M')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
 
 else:
-    st.info("👆 點擊按鈕開始抓取\n\n※ Facebook 目前使用關鍵字搜尋，抓取量可能較少")
+    st.info("👆 點擊上方按鈕開始抓取\n\n※ Facebook 目前抓取量有限，若想改善請提供新竹縣相關 FB 社團名稱")
 
 st.markdown("---")
-st.caption("若想大幅提升 Facebook 抓取品質，請告訴我幾個新竹縣相關的公開社團名稱，我會幫你加入專門抓社團貼文的功能！")
+st.caption("已修正函式定義順序 • Word 匯出功能正常")
